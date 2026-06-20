@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Arya Client</string>
+    <!-- Website link included in APK. Change only this URL if your GitHub Pages repo changes. -->
+    <string name="hosted_website_url">https://vato1994.github.io/chatplogin/</string>
 </resources>

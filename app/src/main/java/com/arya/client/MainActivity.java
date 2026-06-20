@@ -5,12 +5,15 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
 import android.provider.Settings;
+import android.view.Gravity;
 import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -18,63 +21,32 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
-import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 public class MainActivity extends Activity {
-    private EditText urlBox;
-    private EditText usersBox;
-    private EditText passBox;
-    private EditText roomsBox;
+    private static final String PREFS = "arya_prefs";
+    private static final String KEY_SETUP_DONE = "setup_done";
+
     private WebView webView;
-    private TextView status;
+    private FrameLayout setupOverlay;
+    private SharedPreferences prefs;
+
+    private String lastUsers = "";
+    private String lastPassword = "";
+    private String lastRooms = "";
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         requestNotificationPermissionIfNeeded();
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(18, 18, 18, 18);
+        FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(0xFF0F1115);
-
-        TextView title = label("Arya Client Background Version");
-        title.setTextSize(20);
-        title.setTextColor(0xFFFFFFFF);
-        root.addView(title);
-
-        TextView hint = label("Start Background pe tap karo. Notification visible rahegi, tab service WebSocket ko background me alive rakhegi.");
-        hint.setTextColor(0xFFB8C0CC);
-        root.addView(hint);
-
-        urlBox = input("Hosted website URL, example: https://your-site.com/arya.html", "");
-        usersBox = input("Username(s): sher, checkbot, song", "");
-        passBox = input("Password same for IDs", "");
-        passBox.setInputType(0x00000081); // textPassword
-        roomsBox = input("Room IDs to keep joined: 894,689", "");
-
-        Button startBtn = btn("Start Background WebSocket");
-        Button stopBtn = btn("Stop Background");
-        Button openBtn = btn("Open Website UI");
-        Button batteryBtn = btn("Allow Battery Background");
-
-        status = label("Status: idle");
-        status.setTextColor(0xFFFFCC80);
-
-        root.addView(urlBox);
-        root.addView(usersBox);
-        root.addView(passBox);
-        root.addView(roomsBox);
-        root.addView(startBtn);
-        root.addView(stopBtn);
-        root.addView(openBtn);
-        root.addView(batteryBtn);
-        root.addView(status);
 
         webView = new WebView(this);
         WebSettings s = webView.getSettings();
@@ -84,48 +56,108 @@ public class MainActivity extends Activity {
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setLoadWithOverviewMode(true);
         s.setUseWideViewPort(true);
-        webView.setWebViewClient(new WebViewClient());
+        s.setSupportZoom(false);
+        if (Build.VERSION.SDK_INT >= 21) s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+
+        webView.setWebViewClient(new WebViewClient() {
+            @Override public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                injectAryaBridgeHooks();
+            }
+        });
         webView.setWebChromeClient(new WebChromeClient());
         webView.addJavascriptInterface(new AryaBridge(this), "AryaAndroid");
 
-        LinearLayout.LayoutParams webLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-        );
-        root.addView(webView, webLp);
+        root.addView(webView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+
+        setupOverlay = createSetupOverlay();
+        root.addView(setupOverlay, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
 
         setContentView(root);
 
-        startBtn.setOnClickListener(v -> startAryaService());
-        stopBtn.setOnClickListener(v -> stopAryaService());
-        openBtn.setOnClickListener(v -> openWebsite());
-        batteryBtn.setOnClickListener(v -> requestIgnoreBatteryOptimization());
+        openIncludedWebsite();
+        if (prefs.getBoolean(KEY_SETUP_DONE, false)) {
+            setupOverlay.setVisibility(View.GONE);
+        }
     }
 
-    private TextView label(String text) {
+    private FrameLayout createSetupOverlay() {
+        FrameLayout overlay = new FrameLayout(this);
+        overlay.setBackgroundColor(0xEE0F1115);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(18), dp(18), dp(18), dp(18));
+        card.setBackgroundColor(0xFF16181F);
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+
+        TextView title = label("Arya Client", 22, 0xFFFFFFFF);
+        title.setGravity(Gravity.CENTER);
+        TextView hint = label("Ek baar background permission allow karo. Uske baad ye screen hide ho jayegi aur sirf website UI dikhegi. Username/password/rooms website ke andar hi daalna.", 14, 0xFFB8C0CC);
+        hint.setGravity(Gravity.CENTER);
+
+        Button allowBtn = btn("Allow Background & Continue");
+        Button continueBtn = btn("Continue Only");
+
+        allowBtn.setOnClickListener(v -> {
+            prefs.edit().putBoolean(KEY_SETUP_DONE, true).apply();
+            setupOverlay.setVisibility(View.GONE);
+            requestIgnoreBatteryOptimization();
+            Toast.makeText(this, "Website UI opened. Login karte hi background service start hogi.", Toast.LENGTH_LONG).show();
+        });
+
+        continueBtn.setOnClickListener(v -> {
+            prefs.edit().putBoolean(KEY_SETUP_DONE, true).apply();
+            setupOverlay.setVisibility(View.GONE);
+        });
+
+        card.addView(title);
+        card.addView(hint);
+        card.addView(allowBtn, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+        card.addView(continueBtn, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+        );
+        lp.gravity = Gravity.CENTER;
+        lp.setMargins(dp(18), 0, dp(18), 0);
+        overlay.addView(card, lp);
+        return overlay;
+    }
+
+    private TextView label(String text, int sp, int color) {
         TextView v = new TextView(this);
         v.setText(text);
-        v.setPadding(0, 8, 0, 8);
+        v.setTextSize(sp);
+        v.setTextColor(color);
+        v.setPadding(0, dp(8), 0, dp(8));
         return v;
-    }
-
-    private EditText input(String hint, String text) {
-        EditText e = new EditText(this);
-        e.setHint(hint);
-        e.setText(text);
-        e.setSingleLine(true);
-        e.setTextColor(0xFFFFFFFF);
-        e.setHintTextColor(0xFF7C8AA0);
-        e.setBackgroundColor(0xFF1B1F28);
-        e.setPadding(18, 14, 18, 14);
-        return e;
     }
 
     private Button btn(String text) {
         Button b = new Button(this);
         b.setText(text);
+        b.setTextColor(Color.WHITE);
+        b.setAllCaps(false);
+        b.setPadding(dp(12), dp(10), dp(12), dp(10));
         return b;
+    }
+
+    private int dp(int v) {
+        return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
     }
 
     private void requestNotificationPermissionIfNeeded() {
@@ -134,41 +166,51 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void startAryaService() {
-        String users = usersBox.getText().toString().trim();
-        String pass = passBox.getText().toString();
-        String rooms = roomsBox.getText().toString().trim();
-        if (users.isEmpty() || pass.isEmpty()) {
-            Toast.makeText(this, "Username/password required", Toast.LENGTH_SHORT).show();
-            return;
-        }
+    private String includedWebsiteUrl() {
+        String url = getString(getResources().getIdentifier("hosted_website_url", "string", getPackageName())).trim();
+        if (!url.startsWith("http://") && !url.startsWith("https://")) url = "https://" + url;
+        return url;
+    }
+
+    private void openIncludedWebsite() {
+        webView.loadUrl(includedWebsiteUrl());
+    }
+
+    private void startAryaService(String users, String pass, String rooms) {
+        users = users == null ? "" : users.trim();
+        pass = pass == null ? "" : pass;
+        rooms = rooms == null ? "" : rooms.trim();
+        if (users.isEmpty() || pass.isEmpty()) return;
+
+        lastUsers = users;
+        lastPassword = pass;
+        if (!rooms.isEmpty()) lastRooms = rooms;
+
         Intent i = new Intent(this, AryaForegroundService.class);
         i.setAction(AryaForegroundService.ACTION_START);
-        i.putExtra(AryaForegroundService.EXTRA_USERS, users);
-        i.putExtra(AryaForegroundService.EXTRA_PASSWORD, pass);
-        i.putExtra(AryaForegroundService.EXTRA_ROOMS, rooms);
+        i.putExtra(AryaForegroundService.EXTRA_USERS, lastUsers);
+        i.putExtra(AryaForegroundService.EXTRA_PASSWORD, lastPassword);
+        i.putExtra(AryaForegroundService.EXTRA_ROOMS, lastRooms);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
         else startService(i);
-        status.setText("Status: background service started");
-        Toast.makeText(this, "Arya background service started", Toast.LENGTH_SHORT).show();
+    }
+
+    private void updateServiceRooms(String rooms) {
+        rooms = rooms == null ? "" : rooms.trim();
+        if (rooms.isEmpty()) return;
+        lastRooms = rooms;
+
+        Intent i = new Intent(this, AryaForegroundService.class);
+        i.setAction(AryaForegroundService.ACTION_UPDATE_ROOMS);
+        i.putExtra(AryaForegroundService.EXTRA_ROOMS, lastRooms);
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
+        else startService(i);
     }
 
     private void stopAryaService() {
         Intent i = new Intent(this, AryaForegroundService.class);
         i.setAction(AryaForegroundService.ACTION_STOP);
         startService(i);
-        status.setText("Status: background service stopped");
-    }
-
-    private void openWebsite() {
-        String url = urlBox.getText().toString().trim();
-        if (url.isEmpty()) {
-            Toast.makeText(this, "Website URL daalo", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (!url.startsWith("http://") && !url.startsWith("https://")) url = "https://" + url;
-        webView.loadUrl(url);
-        status.setText("Status: website opened");
     }
 
     private void requestIgnoreBatteryOptimization() {
@@ -178,8 +220,6 @@ public class MainActivity extends Activity {
                 Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
                 intent.setData(Uri.parse("package:" + getPackageName()));
                 startActivity(intent);
-            } else {
-                Toast.makeText(this, "Battery optimization already allowed", Toast.LENGTH_SHORT).show();
             }
         } catch (Exception e) {
             Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
@@ -188,18 +228,41 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void injectAryaBridgeHooks() {
+        String js = "javascript:(function(){" +
+                "if(window.__aryaNativeBridgeInstalled)return;window.__aryaNativeBridgeInstalled=true;" +
+                "function v(id){var e=document.getElementById(id);return e?String(e.value||'').trim():'';}" +
+                "function cleanRooms(s){var out=[];String(s||'').split(/[,;\\s]+/).forEach(function(x){x=x.trim();if(/^\\d+$/.test(x)&&out.indexOf(x)<0)out.push(x);});return out.join(',');}" +
+                "function getRooms(){return cleanRooms((localStorage.getItem('arya_bg_rooms')||'')+','+v('roomId'));}" +
+                "function addRoom(id){id=String(id||'').trim();if(!/^\\d+$/.test(id))return;var old=getRooms();var next=cleanRooms(old+','+id);localStorage.setItem('arya_bg_rooms',next);try{AryaAndroid.updateRooms(next);}catch(e){}}" +
+                "function startBg(){try{var u=v('username'),p=v('password'),r=getRooms();if(u&&p&&window.AryaAndroid){AryaAndroid.startBackground(u,p,r);}}catch(e){}}" +
+                "document.addEventListener('click',function(e){var t=e.target;" +
+                "if(t&&t.closest&&t.closest('#loginBtn')){startBg();setTimeout(startBg,1200);}" +
+                "if(t&&t.closest&&(t.closest('#joinByIdBtn')||t.closest('#joinByNameBtn')||t.closest('.room-item'))){setTimeout(function(){addRoom(v('roomId'));startBg();},900);}" +
+                "if(t&&t.closest&&t.closest('#disconnectBtn')){try{AryaAndroid.stopBackground();}catch(x){}}" +
+                "},true);" +
+                "setInterval(function(){var u=v('username'),p=v('password');if(u&&p){startBg();}},60000);" +
+                "})();";
+        webView.evaluateJavascript(js, null);
+    }
+
+    @Override public void onBackPressed() {
+        if (webView != null && webView.canGoBack()) webView.goBack();
+        else super.onBackPressed();
+    }
+
     public class AryaBridge {
         private final Context context;
         AryaBridge(Context context) { this.context = context; }
 
         @JavascriptInterface
         public void startBackground(String usernames, String password, String roomIds) {
-            runOnUiThread(() -> {
-                usersBox.setText(usernames == null ? "" : usernames);
-                passBox.setText(password == null ? "" : password);
-                roomsBox.setText(roomIds == null ? "" : roomIds);
-                startAryaService();
-            });
+            runOnUiThread(() -> startAryaService(usernames, password, roomIds));
+        }
+
+        @JavascriptInterface
+        public void updateRooms(String roomIds) {
+            runOnUiThread(() -> updateServiceRooms(roomIds));
         }
 
         @JavascriptInterface

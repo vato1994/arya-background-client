@@ -31,6 +31,7 @@ import okhttp3.WebSocketListener;
 public class AryaForegroundService extends Service {
     public static final String ACTION_START = "com.arya.client.START";
     public static final String ACTION_STOP = "com.arya.client.STOP";
+    public static final String ACTION_UPDATE_ROOMS = "com.arya.client.UPDATE_ROOMS";
     public static final String EXTRA_USERS = "users";
     public static final String EXTRA_PASSWORD = "password";
     public static final String EXTRA_ROOMS = "rooms";
@@ -87,6 +88,12 @@ public class AryaForegroundService extends Service {
             return START_NOT_STICKY;
         }
 
+        if (intent != null && ACTION_UPDATE_ROOMS.equals(intent.getAction())) {
+            String rooms = intent.getStringExtra(EXTRA_ROOMS);
+            updateRoomsForSessions(parseRooms(rooms));
+            return START_STICKY;
+        }
+
         String users = intent != null ? intent.getStringExtra(EXTRA_USERS) : "";
         String pass = intent != null ? intent.getStringExtra(EXTRA_PASSWORD) : "";
         String rooms = intent != null ? intent.getStringExtra(EXTRA_ROOMS) : "";
@@ -94,6 +101,16 @@ public class AryaForegroundService extends Service {
         startForeground(NOTIFICATION_ID, buildNotification("Arya connecting..."));
         startAccounts(users, pass, parseRooms(rooms));
         return START_STICKY;
+    }
+
+
+    private void updateRoomsForSessions(List<Integer> roomIds) {
+        if (roomIds == null || roomIds.isEmpty()) return;
+        for (AccountSession s : new ArrayList<>(sessions.values())) {
+            s.roomIds = new ArrayList<>(roomIds);
+            if (s.loggedIn) rejoinRooms(s);
+        }
+        updateNotification("Rooms updated: " + roomIds.size() + " • Online " + onlineCount() + "/" + sessions.size());
     }
 
     private void startAccounts(String usersRaw, String password, List<Integer> roomIds) {
