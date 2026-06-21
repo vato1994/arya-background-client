@@ -3,7 +3,6 @@ package com.arya.client;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
-import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -14,8 +13,6 @@ import android.os.Bundle;
 import android.os.PowerManager;
 import android.provider.Settings;
 import android.view.Gravity;
-import android.view.View;
-import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -34,11 +31,7 @@ public class MainActivity extends Activity {
     private FrameLayout setupOverlay;
     private SharedPreferences prefs;
 
-    private String lastUsers = "";
-    private String lastPassword = "";
-    private String lastRooms = "";
-
-    @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
+    @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -62,11 +55,11 @@ public class MainActivity extends Activity {
         webView.setWebViewClient(new WebViewClient() {
             @Override public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
-                injectAryaBridgeHooks();
+                // IMPORTANT: No native Howdies login is injected here.
+                // The website is the only place that logs in, so there is no double-login/IP-block risk.
             }
         });
         webView.setWebChromeClient(new WebChromeClient());
-        webView.addJavascriptInterface(new AryaBridge(this), "AryaAndroid");
 
         root.addView(webView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -80,10 +73,11 @@ public class MainActivity extends Activity {
         ));
 
         setContentView(root);
-
         openIncludedWebsite();
+
         if (prefs.getBoolean(KEY_SETUP_DONE, false)) {
-            setupOverlay.setVisibility(View.GONE);
+            setupOverlay.setVisibility(FrameLayout.GONE);
+            startSafeForegroundService();
         }
     }
 
@@ -99,7 +93,11 @@ public class MainActivity extends Activity {
 
         TextView title = label("Arya Client", 22, 0xFFFFFFFF);
         title.setGravity(Gravity.CENTER);
-        TextView hint = label("Ek baar background permission allow karo. Uske baad ye screen hide ho jayegi aur sirf website UI dikhegi. Username/password/rooms website ke andar hi daalna.", 14, 0xFFB8C0CC);
+        TextView hint = label(
+                "Safe version: website hi login karegi. App koi second Howdies login nahi karegi, isliye logout/IP block issue nahi aayega. Background permission allow karne ke baad ye screen hide ho jayegi.",
+                14,
+                0xFFB8C0CC
+        );
         hint.setGravity(Gravity.CENTER);
 
         Button allowBtn = btn("Allow Background & Continue");
@@ -107,14 +105,16 @@ public class MainActivity extends Activity {
 
         allowBtn.setOnClickListener(v -> {
             prefs.edit().putBoolean(KEY_SETUP_DONE, true).apply();
-            setupOverlay.setVisibility(View.GONE);
+            setupOverlay.setVisibility(FrameLayout.GONE);
+            startSafeForegroundService();
             requestIgnoreBatteryOptimization();
-            Toast.makeText(this, "Website UI opened. Login karte hi background service start hogi.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Safe mode enabled. Login website ke andar hi karo.", Toast.LENGTH_LONG).show();
         });
 
         continueBtn.setOnClickListener(v -> {
             prefs.edit().putBoolean(KEY_SETUP_DONE, true).apply();
-            setupOverlay.setVisibility(View.GONE);
+            setupOverlay.setVisibility(FrameLayout.GONE);
+            Toast.makeText(this, "Website UI opened. Login website ke andar hi karo.", Toast.LENGTH_LONG).show();
         });
 
         card.addView(title);
@@ -176,41 +176,11 @@ public class MainActivity extends Activity {
         webView.loadUrl(includedWebsiteUrl());
     }
 
-    private void startAryaService(String users, String pass, String rooms) {
-        users = users == null ? "" : users.trim();
-        pass = pass == null ? "" : pass;
-        rooms = rooms == null ? "" : rooms.trim();
-        if (users.isEmpty() || pass.isEmpty()) return;
-
-        lastUsers = users;
-        lastPassword = pass;
-        if (!rooms.isEmpty()) lastRooms = rooms;
-
+    private void startSafeForegroundService() {
         Intent i = new Intent(this, AryaForegroundService.class);
         i.setAction(AryaForegroundService.ACTION_START);
-        i.putExtra(AryaForegroundService.EXTRA_USERS, lastUsers);
-        i.putExtra(AryaForegroundService.EXTRA_PASSWORD, lastPassword);
-        i.putExtra(AryaForegroundService.EXTRA_ROOMS, lastRooms);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
         else startService(i);
-    }
-
-    private void updateServiceRooms(String rooms) {
-        rooms = rooms == null ? "" : rooms.trim();
-        if (rooms.isEmpty()) return;
-        lastRooms = rooms;
-
-        Intent i = new Intent(this, AryaForegroundService.class);
-        i.setAction(AryaForegroundService.ACTION_UPDATE_ROOMS);
-        i.putExtra(AryaForegroundService.EXTRA_ROOMS, lastRooms);
-        if (Build.VERSION.SDK_INT >= 26) startForegroundService(i);
-        else startService(i);
-    }
-
-    private void stopAryaService() {
-        Intent i = new Intent(this, AryaForegroundService.class);
-        i.setAction(AryaForegroundService.ACTION_STOP);
-        startService(i);
     }
 
     private void requestIgnoreBatteryOptimization() {
@@ -228,46 +198,8 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void injectAryaBridgeHooks() {
-        String js = "javascript:(function(){" +
-                "if(window.__aryaNativeBridgeInstalled)return;window.__aryaNativeBridgeInstalled=true;" +
-                "function v(id){var e=document.getElementById(id);return e?String(e.value||'').trim():'';}" +
-                "function cleanRooms(s){var out=[];String(s||'').split(/[,;\\s]+/).forEach(function(x){x=x.trim();if(/^\\d+$/.test(x)&&out.indexOf(x)<0)out.push(x);});return out.join(',');}" +
-                "function getRooms(){return cleanRooms((localStorage.getItem('arya_bg_rooms')||'')+','+v('roomId'));}" +
-                "function addRoom(id){id=String(id||'').trim();if(!/^\\d+$/.test(id))return;var old=getRooms();var next=cleanRooms(old+','+id);localStorage.setItem('arya_bg_rooms',next);try{AryaAndroid.updateRooms(next);}catch(e){}}" +
-                "function startBg(){try{var u=v('username'),p=v('password'),r=getRooms();if(u&&p&&window.AryaAndroid){AryaAndroid.startBackground(u,p,r);}}catch(e){}}" +
-                "document.addEventListener('click',function(e){var t=e.target;" +
-                "if(t&&t.closest&&t.closest('#loginBtn')){startBg();setTimeout(startBg,1200);}" +
-                "if(t&&t.closest&&(t.closest('#joinByIdBtn')||t.closest('#joinByNameBtn')||t.closest('.room-item'))){setTimeout(function(){addRoom(v('roomId'));startBg();},900);}" +
-                "if(t&&t.closest&&t.closest('#disconnectBtn')){try{AryaAndroid.stopBackground();}catch(x){}}" +
-                "},true);" +
-                "setInterval(function(){var u=v('username'),p=v('password');if(u&&p){startBg();}},60000);" +
-                "})();";
-        webView.evaluateJavascript(js, null);
-    }
-
     @Override public void onBackPressed() {
         if (webView != null && webView.canGoBack()) webView.goBack();
         else super.onBackPressed();
-    }
-
-    public class AryaBridge {
-        private final Context context;
-        AryaBridge(Context context) { this.context = context; }
-
-        @JavascriptInterface
-        public void startBackground(String usernames, String password, String roomIds) {
-            runOnUiThread(() -> startAryaService(usernames, password, roomIds));
-        }
-
-        @JavascriptInterface
-        public void updateRooms(String roomIds) {
-            runOnUiThread(() -> updateServiceRooms(roomIds));
-        }
-
-        @JavascriptInterface
-        public void stopBackground() {
-            runOnUiThread(() -> stopAryaService());
-        }
     }
 }

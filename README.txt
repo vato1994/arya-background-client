@@ -1,16 +1,17 @@
-Arya Background Client - Website Included Version
+Arya Client - Safe No Double Login Version
+
+Website included:
+https://vato1994.github.io/chatplogin/
+
+IMPORTANT:
+This version does NOT perform a native Howdies login in the Android service.
+Only the website logs in. This prevents double-login/logout/IP-block behavior.
 
 Flow:
-1. App opens your included website automatically:
-   https://vato1994.github.io/chatplogin/
-2. First time only: tap "Allow Background & Continue".
-3. That permission screen hides.
-4. Use the website UI normally.
-5. When you tap Login All IDs on the website, Android native foreground service starts automatically.
-6. When you join rooms from the website UI, native service receives room IDs and keeps them joined in background.
+1. Open app.
+2. Tap Allow Background & Continue.
+3. Login only inside the website UI.
+4. Do not use old APK if it caused logout/block.
 
-To change hosted website URL:
-app/src/main/res/values/strings.xml
-change hosted_website_url only.
-
-Build in GitHub Actions as before.
+Build:
+Upload these files to the same GitHub repo and let GitHub Actions build APK.
